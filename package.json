@@ -1,6 +1,6 @@
 {
   "name": "@voiden/plugin-openapi-import",
-  "version": "1.0.2",
+  "version": "1.0.1",
   "type": "module",
   "private": false,
   "description": "Seamlessly migrate from OpenAPI by importing v3.0 collections and converting them to native Voiden request files with full support for nested folders, environment variables, headers, auth, and all request body types",
