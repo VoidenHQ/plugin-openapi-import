@@ -1,6 +1,6 @@
 {
   "name": "@voiden/plugin-openapi-import",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "type": "module",
   "private": false,
   "description": "Seamlessly migrate from OpenAPI by importing v3.0 collections and converting them to native Voiden request files with full support for nested folders, environment variables, headers, auth, and all request body types",
@@ -13,6 +13,9 @@
     "@voiden/sdk": "1.0.10",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
   },
   "devDependencies": {
     "@voiden/sdk": "1.0.10",
