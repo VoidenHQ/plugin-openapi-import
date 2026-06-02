@@ -72,13 +72,13 @@ const methodKey = (m?: string) => (m || "").toLowerCase() as keyof typeof SWAGGE
 
 // Little helpers
 const StatusColor = (code: string) =>
-  code.startsWith("2") ? "text-success" : code.startsWith("4") ? "text-warning" : code.startsWith("5") ? "text-error" : "text-fg";
+  code.startsWith("2") ? "text-text" : "text-comment";
 
 const CodeBox: React.FC<{ value?: unknown; maxH?: number }> = ({ value, maxH = 224 }) => {
   if (value == null) return null;
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return (
-    <pre className="mt-1 border border-line rounded bg-editor p-2 text-xs overflow-auto text-fg" style={{ maxHeight: maxH }}>
+    <pre className="mt-1 border border-border rounded bg-editor p-2 text-xs overflow-auto text-text" style={{ maxHeight: maxH }}>
       <code>{text}</code>
     </pre>
   );
@@ -139,14 +139,14 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
       setErr(null);
       setSelected({});
       setExpanded({});
-      
+
       // Collapse all tags by default
       const initialFolded: Record<string, boolean> = {};
       parsedNodes.forEach((tag) => {
         initialFolded[tag.id] = true;
       });
       setFoldedTags(initialFolded);
-      
+
       setIsLoading(false);
     } catch (e: any) {
       setDoc(null);
@@ -381,7 +381,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
   if (isLoading) {
     return (
       <div className="p-3 flex flex-col text-text text-sm flex items-center gap-2">
-        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-fg"></div>
+        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-text"></div>
         <span>Loading OpenAPI document...</span>
       </div>
     );
@@ -389,30 +389,30 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
 
   if (!nodes.length) {
     return (
-      <div className="p-3 text-muted text-sm">
+      <div className="p-3 text-comment text-sm">
         No OpenAPI document loaded. Open a tab with an OpenAPI 3.0 JSON/YAML document and click the "OpenAPI Preview" button.
       </div>
     );
   }
 
   return (
-    <div className="w-full openapiplugin">
-      <div className="h-full grid grid-cols-[minmax(520px,1fr)_minmax(420px,1fr)] text-fg">
+    <div className="w-full h-full overflow-hidden openapiplugin">
+      <div className="h-full grid grid-cols-[minmax(520px,1fr)_minmax(420px,1fr)] text-text">
         {/* LEFT */}
-        <div className="border-r border-line flex flex-col overflow-hidden">
-          {/* Sticky header */}
-          <div className="sticky top-0 z-10 border-b border-line bg-panel/80 backdrop-blur">
+        <div className="border-r border-border flex flex-col overflow-hidden h-full">
+          {/* Header */}
+          <div className="border-b border-border bg-panel/80 backdrop-blur flex-shrink-0">
             <div className="px-3 py-2 space-y-2">
               <div className="flex items-baseline gap-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <h2 className="text-base font-semibold">{apiInfo.title}</h2>
                 </label>
                 {apiInfo.version && <span className="text-xs">v{apiInfo.version}</span>}
-                <span className="ml-auto text-[11px] text-muted">
+                <span className="ml-auto text-[11px] text-comment">
                   Showing <b>{visibleCount}</b> endpoint{visibleCount === 1 ? "" : "s"}
                 </span>
               </div>
-              {apiInfo.description && <p className="text-xs line-clamp-2 text-muted">{apiInfo.description}</p>}
+              {apiInfo.description && <p className="text-xs line-clamp-2 text-comment">{apiInfo.description}</p>}
 
               {/* Search / Filter */}
               <div className="flex items-center gap-2">
@@ -420,12 +420,12 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search tags, path, description…"
-                  className="bg-panel placeholder:text-comment rounded-lg outline-none border border-line px-3 py-1 font-mono w-full block relative bg-transparent text-fg"
+                  className="bg-panel placeholder:text-comment rounded-lg outline-none border border-border px-3 py-1 font-mono w-full block relative bg-transparent text-text"
                 />
                 {query && (
                   <button
                     onClick={() => setQuery("")}
-                    className="text-xs px-2 py-1 border border-light rounded hover:bg-selection"
+                    className="text-xs px-2 py-1 border border-border rounded hover:bg-hover"
                     title="Clear search"
                   >
                     Clear
@@ -436,7 +436,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
           </div>
 
           {/* Select All Section */}
-          <div className="px-3 py-2 border-b border-line bg-panel">
+          <div className="px-3 py-2 border-b border-border bg-panel">
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -454,7 +454,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
             </div>
           </div>
 
-          <div className="overflow-auto p-3" style={{ height: "calc(100vh - 290px)" }}>
+          <div className="flex-1 overflow-auto p-3">
             {filteredNodes.map((tag) => {
               const folded = query ? false : !!foldedTags[tag.id];
               const { isFullySelected, isPartiallySelected } = isTagFullySelected(tag);
@@ -462,7 +462,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
               return (
                 <div key={tag.id} className="mb-2">
                   {/* Tag header */}
-                  <div className="flex items-center gap-3 px-3 py-2 bg-block-header hover:bg-selection text-fg rounded">
+                  <div className="flex items-center gap-3 px-3 py-2 bg-active hover:bg-hover text-text rounded">
                     <div className="flex items-center gap-2">
                       <input
                         type="checkbox"
@@ -474,7 +474,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
                         onClick={(e) => e.stopPropagation()}
                         title={isFullySelected ? "Unselect all endpoints in this section" : "Select all endpoints in this section"}
                       />
-                      <div 
+                      <div
                         className="font-medium text-sm uppercase tracking-wide cursor-pointer"
                         onClick={() => setFoldedTags((f) => ({ ...f, [tag.id]: !folded }))}
                       >
@@ -483,8 +483,8 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
                       <div className="text-sm text-comment">{tag.description ||''}</div>
                     </div>
                     <div className="ml-auto flex items-center gap-3">
-                      <div 
-                        className="text-xs text-fg cursor-pointer"
+                      <div
+                        className="text-xs text-text cursor-pointer"
                         onClick={() => setFoldedTags((f) => ({ ...f, [tag.id]: !folded }))}
                       >
                         {folded ? "▶" : "▼"}
@@ -497,7 +497,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
                       {tag.children.map((path) => (
                         <div key={path.id}>
                           {/* Path label */}
-                          <div className="px-1 py-1 text-[11px] text-muted font-mono">{path.label}</div>
+                          <div className="px-1 py-1 text-[11px] text-comment font-mono">{path.label}</div>
                           <div className="space-y-2">
                             {path.children.map((ep) => (
                               <SwaggerOperationRow
@@ -521,15 +521,17 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
         </div>
 
         {/* RIGHT */}
-        <div className="p-3 border border-border flex flex-col min-w-0">
-          <div className="flex items-center justify-between mb-2 gap-3">
-            <div className="text-sm text-fg">
-            </div>
-            <div className="text-sm text-success">
+        <div className="border-l border-border flex flex-col min-w-0 h-full overflow-hidden">
+          {/* Scrollable content area */}
+          <div className="flex-1 overflow-auto p-3" />
+
+          {/* Footer — always pinned to bottom */}
+          <div className="flex-shrink-0 border-t border-border px-3 py-2 flex items-center justify-between gap-3">
+            <div className="text-sm text-green-500">
               <b>{isSaved ? "Saved" : ""}</b>
             </div>
             <button
-              className="bg-button-primary cursor-pointer text-text px-3 py-1 rounded-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed border border-line "
+              className="bg-button-primary cursor-pointer text-text px-3 py-1 rounded-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed border border-border"
               disabled={!totalSelected || busy}
               onClick={() => {
                 handleGenerate(0);
@@ -543,22 +545,22 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
         {/* Confirmation popup */}
         {confirmOpen && (
           <div className="absolute inset-x-0 z-50 flex justify-center" style={{ bottom: "50px" }}>
-            <div className="pointer-events-auto w-full max-w-[700px] rounded-md border border-line bg-panel text-fg shadow-lg">
+            <div className="pointer-events-auto w-full max-w-[700px] rounded-md border border-border bg-panel text-text shadow-lg">
               {/* Header */}
-              <div className="flex items-center justify-between px-4 py-2 border-b border-line">
+              <div className="flex items-center justify-between px-4 py-2 border-b border-border">
                 <div className="text-sm font-medium">Files already exists</div>
-                <button className="text-xs text-muted hover:text-fg" onClick={() => setConfirmOpen(false)} title="Close">
+                <button className="text-xs text-comment hover:text-text" onClick={() => setConfirmOpen(false)} title="Close">
                   ✕
                 </button>
               </div>
 
               {/* Body */}
               <div className="px-4 py-3 text-sm space-y-4">
-                <p className="text-fg">The target files already exists. Do you want to overwrite it or create a new folder?</p>
+                <p className="text-text">The target files already exists. Do you want to overwrite it or create a new folder?</p>
 
                 <div className="flex items-center justify-center gap-4">
                   <button
-                    className="px-4 py-2 rounded bg-ui text-fg border border-line text-sm font-medium hover:bg-selection"
+                    className="px-4 py-2 rounded bg-active text-text border border-border text-sm font-medium hover:bg-hover"
                     onClick={async () => {
                       handleGenerate(1);
                     }}
@@ -566,7 +568,7 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
                     Overwrite
                   </button>
                   <button
-                    className="px-4 py-2 rounded bg-ui text-fg border border-line text-sm font-medium hover:bg-selection"
+                    className="px-4 py-2 rounded bg-active text-text border border-border text-sm font-medium hover:bg-hover"
                     onClick={async () => {
                       handleGenerate(2);
                     }}
@@ -625,10 +627,10 @@ const SwaggerOperationRow: React.FC<{
             <div className={`flex-1 min-w-0 px-3 py-2 `}>
               <div className="flex items-start gap-2">
                 <div className="min-w-0">
-                  <div className="font-mono text-xs break-all text-fg font-bold">
+                  <div className="font-mono text-xs break-all text-text font-bold">
                     {ep.path}
                     {/* extra text after URL (non-bold) — using ep.summary by default */}
-                    {ep.summary ? <span className="font-normal text-muted ml-2">{ep.summary}</span> : null}
+                    {ep.summary ? <span className="font-normal text-comment ml-2">{ep.summary}</span> : null}
                   </div>
                 </div>
               </div>
@@ -638,7 +640,7 @@ const SwaggerOperationRow: React.FC<{
             <div className={`shrink-0 px-3 flex items-center py-2 `}>
               <div className="">
                 <button
-                  className="text-[11px] text-muted hover:text-fg shrink-0"
+                  className="text-[11px] text-comment hover:text-text shrink-0"
                   onClick={(e) => {
                     e.stopPropagation();
                     onToggleExpand();
@@ -653,7 +655,7 @@ const SwaggerOperationRow: React.FC<{
 
         {/* details (inline) */}
         {expanded && (
-          <div className={`border-t border-method-${theme.method} p-3 bg-ui`}>
+          <div className={`border-t border-method-${theme.method} p-3 bg-active`}>
             <OperationDetails ep={ep} />
           </div>
         )}
@@ -753,14 +755,14 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
   }> = ({ available, value, onChange }) => {
     const hasBoth = available.example && available.schema;
     if (!hasBoth) {
-      return <div className="text-[11px] text-fg mt-1">{available.example ? "Example" : "Schema"}</div>;
+      return <div className="text-[11px] text-text mt-1">{available.example ? "Example" : "Schema"}</div>;
     }
     return (
-      <div className="flex items-center text-fg gap-3 text-[12px] mt-1">
+      <div className="flex items-center text-text gap-3 text-[12px] mt-1">
         <button className={`hover:underline ${value === "example" ? "font-semibold" : ""}`} onClick={() => onChange("example")} type="button">
           Example
         </button>
-        <span className="text-fg">|</span>
+        <span className="text-text">|</span>
         <button className={`hover:underline ${value === "schema" ? "font-semibold" : ""}`} onClick={() => onChange("schema")} type="button">
           Schema
         </button>
@@ -772,13 +774,13 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
     <div className={dense ? "space-y-3" : "space-y-4"}>
       {/* Parameters */}
       <section>
-        <h4 className="text-[12px] font-semibold mb-1 text-fg">Parameters</h4>
+        <h4 className="text-[12px] font-semibold mb-1 text-text">Parameters</h4>
         {parameters.length === 0 ? (
-          <div className="text-xs text-muted">No parameters</div>
+          <div className="text-xs text-comment">No parameters</div>
         ) : (
           <div className="overflow-auto">
             <table className="w-full text-xs border-separate border-spacing-y-1">
-              <thead className="text-muted">
+              <thead className="text-comment">
                 <tr>
                   <th className="text-left font-normal">Name</th>
                   <th className="text-left font-normal">In</th>
@@ -791,12 +793,12 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
                 {parameters.map((p, i) => {
                   const t = p.schema?.type ?? p.type ?? (p.schema?.items ? `array<${p.schema.items?.type || "object"}>` : "");
                   return (
-                    <tr key={i} className="align-top text-fg">
+                    <tr key={i} className="align-top text-text">
                       <td className="pr-3 font-mono">{p.name}</td>
                       <td className="pr-3">{p.in}</td>
                       <td className="pr-3">{t}</td>
                       <td className="pr-3">{p.required ? "Yes" : "No"}</td>
-                      <td className="pr-3 text-muted">{p.description || ""}</td>
+                      <td className="pr-3 text-comment">{p.description || ""}</td>
                     </tr>
                   );
                 })}
@@ -808,12 +810,12 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
 
       {/* Request body */}
       <section>
-        <h4 className="text-[12px] font-semibold mb-1 text-fg">Request body</h4>
+        <h4 className="text-[12px] font-semibold mb-1 text-text">Request body</h4>
         {!requestBody || (!reqSchema && reqExample == null) ? (
-          <div className="text-xs text-muted">No body</div>
+          <div className="text-xs text-comment">No body</div>
         ) : (
           <>
-            {requestBody.description && <div className="text-xs text-muted mb-1">{requestBody.description}</div>}
+            {requestBody.description && <div className="text-xs text-comment mb-1">{requestBody.description}</div>}
 
             <Tabs available={{ example: reqExample != null, schema: !!reqSchema }} value={reqView} onChange={setReqView} />
 
@@ -825,9 +827,9 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
 
       {/* Responses */}
       <section>
-        <h4 className="text-[12px] font-semibold mb-2 text-fg">Responses</h4>
+        <h4 className="text-[12px] font-semibold mb-2 text-text">Responses</h4>
         {!responses || Object.keys(responses).length === 0 ? (
-          <div className="text-xs text-muted">No responses</div>
+          <div className="text-xs text-comment">No responses</div>
         ) : (
           <div className="space-y-2">
             {Object.entries<any>(responses).map(([code, resp]) => {
@@ -840,9 +842,9 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
               const setCurrent = (v: "example" | "schema") => setRespView((m) => ({ ...m, [code]: v }));
 
               return (
-                <div key={code} className="rounded border border-line p-2">
+                <div key={code} className="rounded border border-border p-2">
                   <div className={`text-xs font-semibold ${StatusColor(String(code))}`}>{code}</div>
-                  {resp?.description && <div className="text-xs text-muted mt-0.5">{resp.description}</div>}
+                  {resp?.description && <div className="text-xs text-comment mt-0.5">{resp.description}</div>}
 
                   <Tabs available={{ example: example != null, schema: !!schema }} value={current} onChange={setCurrent} />
 

@@ -1,5 +1,18 @@
 [
   {
+    "version": "v1.0.6",
+    "date": "02/06/2026",
+    "title": "UI & Theme Fixes",
+    "changes": {
+      "Fixed": [
+        "All text and border colors now use standard Voiden theme variables throughout the preview panel",
+        "API title no longer overlaps the OpenAPI Preview top bar",
+        "Panel height correctly contained within overlay — no overflow outside container",
+        "Generate Voiden Files button pinned to bottom of panel at all times"
+      ]
+    }
+  },
+  {
     "version": "v1.0.5",
     "date": "29/05/2026",
     "title": "Changelog & Housekeeping",
