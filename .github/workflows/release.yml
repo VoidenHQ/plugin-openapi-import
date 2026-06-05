@@ -25,4 +25,5 @@ jobs:
         with:
           files: |
             dist/openapi-import.js
+            dist/changelog.json
             manifest.json
