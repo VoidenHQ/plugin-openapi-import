@@ -77,6 +77,24 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
 
                 const currentActiveProject = await context.project.getActiveProject();
 
+                // Capture the active tab's source path NOW, before the overlay
+                // opens and potentially changes which tab is considered "active".
+                let activeSource = "";
+                try {
+                  const tab = await context.tab?.getActiveTab?.() as any;
+                  if (tab?.source) {
+                    const normalizedSource = tab.source.replace(/\\/g, "/");
+                    const normalizedProject = (currentActiveProject ?? "").replace(/\\/g, "/");
+                    if (normalizedProject && normalizedSource.startsWith(normalizedProject)) {
+                      activeSource = normalizedSource.slice(normalizedProject.length).replace(/^[/\\]+/, "");
+                    } else {
+                      activeSource = normalizedSource;
+                    }
+                  }
+                } catch {
+                  // leave activeSource as ""
+                }
+
                 const rawFromEditor = readActiveEditorText();
 
                 // Fallbacks if you still want to try the tab snapshot
@@ -87,6 +105,7 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
                 (window as any).__voidenOpenAPILastPayload__ = {
                   raw,
                   currentActiveProject,
+                  activeSource,
                   selectAll: false,
                   autoGenerate: false,
                 };
@@ -105,6 +124,7 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
                       detail: {
                         raw,
                         currentActiveProject,
+                        activeSource,
                         selectAll: false,
                         autoGenerate: false,
                       },
@@ -139,8 +159,8 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
       if (context.pipeline?.registerHook) {
         await context.pipeline.registerHook(
           "post-processing",
-          async (context: any) => {
-            const { requestState, responseState, metadata } = context;
+          async (hookContext: any) => {
+            const { requestState, responseState, metadata } = hookContext;
             try {
               const requestDoc = requestState?.metadata?.editorDocument ||
                 metadata?.requestDocument ||
@@ -166,17 +186,21 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
                 },
                 request: {
                   method: requestState.method || 'GET',
-                  path: requestState.pathParams || [],
+                  path: requestState.url ? (requestState.url.startsWith('http') ? new URL(requestState.url).pathname : requestState.url.split('?')[0]) : '/',
                   url: requestState.url || '',
                   headers: requestState.headers || {},
-                  body:JSON.parse(requestState.body||'{}')||{},
-                  query: requestState.queryParams||[],
-                  contentType:requestState.contentType
+                  body: (() => {
+                    if (!requestState.body) return {};
+                    if (typeof requestState.body !== 'string') return requestState.body;
+                    try { return JSON.parse(requestState.body); } catch { return requestState.body; }
+                  })(),
+                  query: requestState.queryParams || [],
+                  contentType: requestState.contentType
                 },
               };
 
               const { validateOpenAPI } = await import('./lib/openapiValidationEngine')
-              // Execute validation
+              // Execute validation - pass plugin context (not hookContext) so project/files APIs are available
               const result = await validateOpenAPI(validation, validationContext, context);
 
               // Store results in responseState.metadata

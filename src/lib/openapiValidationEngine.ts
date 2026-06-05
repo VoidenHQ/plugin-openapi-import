@@ -79,10 +79,11 @@ export async function validateOpenAPI(
     // Find matching operation in the spec
     const operation = findOperation(spec, context);
 
-    if (!operation) {
+    if (!operation || operation._notFound) {
+      const available = operation?.availablePaths ? ` — spec defines: ${operation.availablePaths}` : '';
       errors.push({
         type: 'schema',
-        message: `No matching operation found for ${context.request.method} ${context.request.path}`,
+        message: `No matching operation found for ${context.request.method} ${context.request.path}${available}`,
       });
       return {
         passed: false,
@@ -142,7 +143,7 @@ export async function validateOpenAPI(
 }
 
 /**
- * Load OpenAPI specification from file
+ * Load OpenAPI specification from file or URL
  */
 async function loadOpenAPISpec(validation: OpenAPIValidation, pluginContext: ExtendedPluginContextExplicit): Promise<any> {
   if (!validation.specFilePath) {
@@ -151,27 +152,61 @@ async function loadOpenAPISpec(validation: OpenAPIValidation, pluginContext: Ext
   }
 
   try {
-    console.log('[OpenAPI Validation] Loading spec from:', validation.specFilePath);
+    const isUrl = /^https?:\/\//i.test(validation.specFilePath) || validation.isExternalSpec === 'true' || (validation as any).isExternalSpec === true;
+    let content: string | null = null;
 
-    const content = await pluginContext.files?.read(validation.specFilePath);
+    if (isUrl) {
+      console.log('[OpenAPI Validation] Fetching spec from URL:', validation.specFilePath);
+      const response = await fetch(validation.specFilePath);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch spec from URL: ${response.status} ${response.statusText}`);
+      }
+      content = await response.text();
+    } else {
+      let finalPath = validation.specFilePath;
+
+      // Resolve relative paths against active project root
+      const isAbsolute = finalPath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(finalPath);
+      if (!isAbsolute) {
+        const projectRoot = await pluginContext.project?.getActiveProject?.();
+        if (projectRoot) {
+          const joined = await (window as any).electron?.utils?.pathJoin?.(projectRoot, finalPath);
+          finalPath = joined ?? `${projectRoot.replace(/\\/g, '/').replace(/\/$/, '')}/${finalPath.replace(/\\/g, '/').replace(/^\//, '')}`;
+          console.log('[OpenAPI Validation] Resolved relative path:', validation.specFilePath, '->', finalPath);
+        } else {
+          console.warn('[OpenAPI Validation] No active project, cannot resolve relative path:', finalPath);
+        }
+      }
+
+      console.log('[OpenAPI Validation] Reading spec from file:', finalPath);
+      content = await pluginContext.files?.read(finalPath) ?? null;
+    }
 
     if (!content) {
-      console.error('[OpenAPI Validation] File content is empty');
+      console.error('[OpenAPI Validation] File content is empty or could not be read:', validation.specFilePath);
       return null;
     }
 
     const isYaml = validation.specFilename?.endsWith('.yaml') ||
-      validation.specFilename?.endsWith('.yml');
+      validation.specFilename?.endsWith('.yml') ||
+      validation.specFilePath.endsWith('.yaml') ||
+      validation.specFilePath.endsWith('.yml');
 
     console.log('[OpenAPI Validation] File type:', isYaml ? 'YAML' : 'JSON');
 
     if (isYaml) {
-      return parseYAML(content as string);
+      return parseYAML(content);
     } else {
-      return JSON.parse(content as string);
+      try {
+        return JSON.parse(content);
+      } catch (e) {
+        // Try YAML if JSON fails, some specs might lack correct extensions
+        console.warn('[OpenAPI Validation] Failed to parse as JSON, trying YAML fallback');
+        return parseYAML(content);
+      }
     }
-  } catch (error) {
-    console.error('[OpenAPI Validation] Failed to load spec from file:', error);
+  } catch (error: any) {
+    console.error('[OpenAPI Validation] Failed to load spec:', error);
     return null;
   }
 }
@@ -241,60 +276,75 @@ function normalizePath(fullPath: string, basePath: string): string {
  * Find matching operation in OpenAPI spec
  * NOW PROPERLY HANDLES BASE PATHS FROM SERVER URLs
  */
+function normalizeMatcher(p: string): string {
+  // Ensure leading slash, strip trailing slash (except root)
+  if (!p.startsWith('/')) p = '/' + p;
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p;
+}
+
+function buildPathRegex(specPath: string): RegExp {
+  // Escape all regex special chars first, then replace escaped braces back for path params
+  const escaped = specPath.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, (c) =>
+    c === '{' || c === '}' ? c : '\\' + c
+  );
+  const pattern = escaped.replace(/{[^}]+}/g, '[^/]+');
+  return new RegExp(`^${pattern}$`);
+}
+
 function findOperation(spec: any, context: OpenAPIValidationContext): any {
   const paths = spec.paths || {};
   const method = context.request.method.toLowerCase();
-  
-  let targetPath = context.request.path;
-  
-  try {
-    const url = new URL(context.request.url);
-    targetPath = url.pathname;
-  } catch (e) {
-    if (targetPath.includes('?')) {
-      targetPath = targetPath.split('?')[0];
+
+  let targetPath = String(context.request.path || '/');
+
+  // Prefer extracting pathname from the full URL when available
+  if (context.request.url && context.request.url.startsWith('http')) {
+    try {
+      targetPath = new URL(context.request.url).pathname;
+    } catch {
+      // fall back to context.request.path
     }
   }
 
-  const basePath = getBasePath(spec);
-  const normalizedPath = normalizePath(targetPath, basePath);
+  // Strip query string if it leaked into the path
+  if (targetPath.includes('?')) targetPath = targetPath.split('?')[0];
 
-  // Try exact path match first
-  if (paths[normalizedPath]) {
-    const pathItem = paths[normalizedPath];
-    if (pathItem[method]) {
-      console.log('[OpenAPI Validation] Exact match found:', normalizedPath);
+  const basePath = getBasePath(spec);
+  const normalizedPath = normalizeMatcher(normalizePath(targetPath, basePath));
+
+  // 1. Exact match
+  const exactItem = paths[normalizedPath] as any;
+  if (exactItem?.[method]) {
+    console.log('[OpenAPI Validation] Exact match found:', normalizedPath);
+    return {
+      path: normalizedPath,
+      method: method.toUpperCase(),
+      operationId: exactItem[method].operationId,
+      spec: exactItem[method],
+    };
+  }
+
+  // 2. Path-parameter pattern match
+  for (const [specPath, pathItem] of Object.entries(paths)) {
+    if (!pathItem || typeof pathItem !== 'object') continue;
+    if (!(pathItem as any)[method]) continue;
+
+    if (buildPathRegex(normalizeMatcher(specPath)).test(normalizedPath)) {
+      console.log('[OpenAPI Validation] Pattern match found:', specPath);
       return {
-        path: normalizedPath,
+        path: specPath,
         method: method.toUpperCase(),
-        operationId: pathItem[method].operationId,
-        spec: pathItem[method],
+        operationId: (pathItem as any)[method].operationId,
+        spec: (pathItem as any)[method],
       };
     }
   }
 
-  for (const [specPath, pathItem] of Object.entries(paths)) {
-    if (!pathItem || typeof pathItem !== 'object') continue;
-    
-    if ((pathItem as any)[method]) {
-      const pathPattern = specPath.replace(/{[^}]+}/g, '[^/]+');
-      const regex = new RegExp(`^${pathPattern}$`);
-      
-      if (regex.test(normalizedPath)) {
-        console.log('[OpenAPI Validation] Pattern matched:', specPath);
-        return {
-          path: specPath,
-          method: method.toUpperCase(),
-          operationId: (pathItem as any)[method].operationId,
-          spec: (pathItem as any)[method],
-        };
-      }
-    }
-  }
-
-  console.warn('[OpenAPI Validation] No matching operation found');
-  console.warn('[OpenAPI Validation] Available paths:', Object.keys(paths));
-  return null;
+  const availablePaths = Object.keys(paths).join(', ') || '(none)';
+  console.warn('[OpenAPI Validation] No matching operation found for', method.toUpperCase(), normalizedPath);
+  console.warn('[OpenAPI Validation] Available paths:', availablePaths);
+  return { _notFound: true, availablePaths };
 }
 /**
  * Resolve schema references ($ref)
@@ -838,7 +888,10 @@ function validateRequestBody(
     return;
   }
 
-  if (requestBody.required && (!request.body || Object.keys(request.body).length === 0)) {
+  const bodyIsEmpty = !request.body ||
+    (typeof request.body === 'object' && !Array.isArray(request.body) && Object.keys(request.body).length === 0);
+
+  if (requestBody.required && bodyIsEmpty) {
     errors.push({
       type: 'schema',
       message: 'Request body is required but not provided',
@@ -869,9 +922,15 @@ function validateRequestBody(
     return;
   }
 
-  console.log('[OpenAPI Validation] Validating request body against schema');
-
   const schema = resolveSchema(mediaTypeSpec.schema, spec);
+
+  // Binary/octet-stream bodies can't be schema-validated (they're file buffers, not JSON)
+  if (schema.format === 'binary' || contentType === 'application/octet-stream') {
+    console.log('[OpenAPI Validation] Skipping schema validation for binary body');
+    return;
+  }
+
+  console.log('[OpenAPI Validation] Validating request body against schema');
   validateUnified(schema, request.body, 'request.body', spec, errors, warnings);
 }
 
@@ -1075,14 +1134,21 @@ function validateStatusCode(
   errors: ValidationError[]
 ): void {
   const responses = operation.spec.responses || {};
+
+  // Guard against missing or invalid status
+  if (!actualStatus || isNaN(actualStatus)) {
+    return;
+  }
+
   const statusStr = String(actualStatus);
 
   if (responses[statusStr]) {
     return;
   }
 
-  const wildcardPattern = statusStr[0] + 'XX';
-  if (responses[wildcardPattern]) {
+  // OpenAPI allows both uppercase (2XX) and lowercase (2xx) wildcards
+  const firstDigit = statusStr[0];
+  if (responses[firstDigit + 'XX'] || responses[firstDigit + 'xx']) {
     return;
   }
 
@@ -1121,12 +1187,16 @@ function validateContentType(
   }
 
   const actualContentType = response.contentType || '';
+  // Nothing to check if the response didn't send a content-type
+  if (!actualContentType) return;
+
+  const cleanActual = actualContentType.split(';')[0].trim().toLowerCase();
   const definedContentTypes = Object.keys(responseSpec.content);
 
   const matches = definedContentTypes.some((ct: string) => {
-    const cleanActual = actualContentType.split(';')[0].trim();
-    const cleanDefined = ct.split(';')[0].trim();
-    return cleanActual.includes(cleanDefined) || cleanDefined.includes(cleanActual);
+    const cleanDefined = ct.split(';')[0].trim().toLowerCase();
+    // Exact match, or wildcard (* / */*)
+    return cleanDefined === '*/*' || cleanDefined === cleanActual;
   });
 
   if (!matches) {
@@ -1171,9 +1241,20 @@ function validateResponseSchema(
     return;
   }
 
-  console.log('[OpenAPI Validation] Validating response body against schema');
+  // No body to validate (e.g. 204 No Content)
+  if (response.body === null || response.body === undefined) {
+    return;
+  }
 
   const schema = resolveSchema(mediaTypeSpec.schema, spec);
+
+  // Binary responses can't be schema-validated
+  if (schema.format === 'binary' || contentType === 'application/octet-stream') {
+    console.log('[OpenAPI Validation] Skipping schema validation for binary response body');
+    return;
+  }
+
+  console.log('[OpenAPI Validation] Validating response body against schema');
   validateUnified(schema, response.body, 'response.body', spec, errors, warnings);
 }
 
@@ -1206,7 +1287,14 @@ function validateResponseHeaders(
   );
 
   // Validate each defined header
-  for (const [headerName, headerSpec] of Object.entries(responseSpec.headers)) {
+  for (const [headerName, rawHeaderSpec] of Object.entries(responseSpec.headers)) {
+    if (!rawHeaderSpec || typeof rawHeaderSpec !== 'object') continue;
+
+    // Resolve $ref if the header spec is a reference
+    const headerSpec: any = (rawHeaderSpec as any).$ref
+      ? resolveSchema(rawHeaderSpec, spec)
+      : rawHeaderSpec;
+
     if (!headerSpec || typeof headerSpec !== 'object') continue;
 
     const headerNameLower = headerName.toLowerCase();

@@ -317,22 +317,40 @@ const asJsonBlockString = (value: any): string => {
 };
 
 // Pick the most suitable content entry from a responses/requestBody "content" object
-function pickJsonishContent(content: any) {
+export function pickBestContent(content: any): { type: string; content: any } | undefined {
   if (!content || typeof content !== "object") return undefined;
 
-  // exact JSON
-  if (content["application/json"]) return content["application/json"];
+  const types = Object.keys(content);
+  if (types.length === 0) return undefined;
+
+  // Priority order for picking content type
+  const priority = [
+    "application/json",
+    "application/xml",
+    "text/xml",
+    "application/x-yaml",
+    "text/yaml",
+    "application/yaml",
+    "multipart/form-data",
+    "application/x-www-form-urlencoded",
+  ];
+
+  for (const mimeType of priority) {
+    if (content[mimeType]) {
+      return { type: mimeType, content: content[mimeType] };
+    }
+  }
 
   // JSON-ish vendor types: application/*+json
-  const plusJson = Object.keys(content).find((k) => /^application\/.+\+json$/i.test(k));
-  if (plusJson) return content[plusJson];
+  const plusJson = types.find((k) => /^application\/.+\+json$/i.test(k));
+  if (plusJson) return { type: plusJson, content: content[plusJson] };
 
   // Wildcard */*
-  if (content["*/*"]) return content["*/*"];
+  if (content["*/*"]) return { type: "*/*", content: content["*/*"] };
 
   // Fallback to the first entry
-  const first = Object.values(content)[0];
-  return first;
+  const firstType = types[0];
+  return { type: firstType, content: content[firstType] };
 }
 
 function sampleFromParamSchemaToString(schema: any): string {
@@ -348,48 +366,58 @@ function sampleFromParamSchemaToString(schema: any): string {
   return String(v);
 }
 
-/** Pull a JSON example (object/array/primitive) from request body (already de-ref’d) */
-function getRequestJsonExample(ep: EndpointNode) {
-  const jsonish = pickJsonishContent(ep.requestBody?.content);
-  if (!jsonish) return undefined;
+/** Pull an example (object/array/primitive) from request body (already de-ref’d) */
+function getRequestExample(ep: EndpointNode) {
+  const best = pickBestContent(ep.requestBody?.content);
+  if (!best) return undefined;
 
-  const schema = jsonish.schema;
-  const ex = jsonish.example ?? jsonish.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
+  const { type, content: bodyContent } = best;
+  const schema = bodyContent.schema;
+  const ex = bodyContent.example ?? bodyContent.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
 
+  let exampleValue;
   if (ex !== undefined) {
-    if (typeof ex === "string") {
+    if (typeof ex === "string" && (type.includes("json") || type === "*/*")) {
       try {
-        return JSON.parse(ex);
+        exampleValue = JSON.parse(ex);
       } catch {
-        return ex;
+        exampleValue = ex;
       }
+    } else {
+      exampleValue = ex;
     }
-    return ex;
+  } else if (schema) {
+    exampleValue = sampleFromSchema(schema);
   }
-  if (schema) return sampleFromSchema(schema);
-  return undefined;
+
+  return { type, example: exampleValue, schema };
 }
 
-/** Pull a JSON example from a response content (already de-ref’d) */
-function getResponseJsonExample(resp: any) {
-  const jsonish = pickJsonishContent(resp?.content);
-  if (!jsonish) return undefined;
+/** Pull an example from a response content (already de-ref’d) */
+function getResponseExample(resp: any) {
+  const best = pickBestContent(resp?.content);
+  if (!best) return undefined;
 
-  const schema = jsonish.schema;
-  const ex = jsonish.example ?? jsonish.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
+  const { type, content: bodyContent } = best;
+  const schema = bodyContent.schema;
+  const ex = bodyContent.example ?? bodyContent.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
 
+  let exampleValue;
   if (ex !== undefined) {
-    if (typeof ex === "string") {
+    if (typeof ex === "string" && (type.includes("json") || type === "*/*")) {
       try {
-        return JSON.parse(ex);
+        exampleValue = JSON.parse(ex);
       } catch {
-        return ex;
+        exampleValue = ex;
       }
+    } else {
+      exampleValue = ex;
     }
-    return ex;
+  } else if (schema) {
+    exampleValue = sampleFromSchema(schema);
   }
-  if (schema) return sampleFromSchema(schema);
-  return undefined;
+
+  return { type, example: exampleValue, schema };
 }
 
 const getVoidenApiHelpers = () => {
@@ -404,18 +432,21 @@ function isPlainObject(v: any): v is Record<string, any> {
   return v && typeof v === "object" && !Array.isArray(v);
 }
 
-// Turn a schema into a compact string for table cells (not pretty-printed)
-function sampleForCell(schema: any): string {
-  const v = sampleFromSchema(schema);
-  if (v === undefined || v === null) return "";
-  if (isPlainObject(v) || Array.isArray(v)) {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return "";
+// Turn a schema into a compact string for table cells (only if default is provided)
+function tableValueFromSchema(schema: any): string {
+  if (schema && schema.default !== undefined) {
+    const v = schema.default;
+    if (v === undefined || v === null) return "";
+    if (isPlainObject(v) || Array.isArray(v)) {
+      try {
+        return JSON.stringify(v);
+      } catch {
+        return "";
+      }
     }
+    return String(v);
   }
-  return String(v);
+  return "";
 }
 
 /**
@@ -430,24 +461,24 @@ function flattenSchemaToRows(baseName: string, schema: any, maxDepth = 3, depth 
 
   if (type === "object" && isPlainObject(schema?.properties)) {
     for (const [k, subSchema] of Object.entries<any>(schema.properties)) {
-      const key = `${k}`;
+      const key = depth === 0 ? k : `${baseName}.${k}`;
       const subType = subSchema?.type || (subSchema?.properties ? "object" : subSchema?.items ? "array" : undefined);
 
       if (subType === "object" && depth < maxDepth) {
         rows.push(...flattenSchemaToRows(key, subSchema, maxDepth, depth + 1));
       } else {
-        rows.push([key, ""]);
+        rows.push([key, tableValueFromSchema(subSchema)]);
       }
     }
     if (rows.length === 0) {
       // object with no properties -> at least give one row so the user can fill it
-      rows.push([baseName, ""]);
+      rows.push([baseName, tableValueFromSchema(schema)]);
     }
     return rows;
   }
 
   // arrays or primitives -> single row
-  rows.push([baseName, sampleForCell(schema)]);
+  rows.push([baseName, tableValueFromSchema(schema)]);
   return rows;
 }
 
@@ -456,13 +487,14 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
   const blocks: any[] = [];
   //OpenApi Link
   const fileName = activeSource.split("/").pop();
+  const isUrl = /^https?:\/\//i.test(activeSource);
   blocks.push({
     type: "openapispecLink",
     attrs: {
       uid: makeUid(),
       filePath: activeSource,
       filename: fileName,
-      isExternal: false
+      isExternal: isUrl
     }
   })
 
@@ -483,7 +515,7 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
   // HEADERS
   const headers = (ep.parameters || [])
     .filter((p) => p.in === "header")
-    .map((p) => [p.name, p.schema?.default ?? p.schema?.example ?? ""] as [string, string]);
+    .map((p) => [p.name, tableValueFromSchema(p.schema)] as [string, string]);
 
   if (headers.length) {
     blocks.push({
@@ -510,7 +542,7 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
         queries.push(...flattenSchemaToRows(p.name, schema));
       } else {
         // Single row (primitive, array, or non-exploded object)
-        queries.push([p.name, ""]);
+        queries.push([p.name, tableValueFromSchema(schema)]);
       }
     });
 
@@ -523,21 +555,47 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
   }
 
   // REQUEST BODY
-  const reqExample = getRequestJsonExample(ep); // may synthesize now with full props
-  if (reqExample !== undefined && reqExample !== null) {
-    blocks.push({ type: "paragraph", attrs: { uid: makeUid() }, content: "Request Body – Example" });
-    blocks.push({
-      type: "json_body",
-      attrs: { uid: makeUid(), importedFrom: "", contentType: "json", body: asJsonBlockString(reqExample) },
-    });
+  const reqRes = getRequestExample(ep);
+  if (reqRes?.example !== undefined && reqRes?.example !== null) {
+    const { type, example, schema } = reqRes;
+    
+    if (type === "multipart/form-data" || type === "application/x-www-form-urlencoded") {
+      const rows = schema ? flattenSchemaToRows("root", schema) : [];
+      blocks.push({
+        type: type === "multipart/form-data" ? "multipart-table" : "url-table",
+        attrs: { uid: makeUid(), importedFrom: "" },
+        content: [{ type: "table", rows: toRows(rows) }],
+      });
+    } else if (type === "application/xml" || type === "text/xml") {
+      blocks.push({
+        type: "xml_body",
+        attrs: { uid: makeUid(), importedFrom: "", contentType: type, body: String(example) },
+      });
+    } else if (type === "application/x-yaml" || type === "text/yaml" || type === "application/yaml") {
+      blocks.push({
+        type: "yml_body",
+        attrs: { uid: makeUid(), importedFrom: "", contentType: type, body: String(example) },
+      });
+    } else if (type === "application/octet-stream") {
+      blocks.push({
+        type: "restFile",
+        attrs: { uid: makeUid(), fieldName: "file" },
+      });
+    } else {
+      // Default to JSON for application/json, */*, or unknown
+      blocks.push({
+        type: "json_body",
+        attrs: { uid: makeUid(), importedFrom: "", contentType: "json", body: asJsonBlockString(example) },
+      });
+    }
   }
 
   // RESPONSES
   if (ep.responses && Object.keys(ep.responses).length) {
     for (const [code, resp] of Object.entries<any>(ep.responses)) {
-      const respExample = getResponseJsonExample(resp); // synthesized with full props
+      const respRes = getResponseExample(resp);
 
-      if (respExample !== undefined && respExample !== null) {
+      if (respRes?.example !== undefined && respRes?.example !== null) {
         blocks.push({
           type: "paragraph",
           attrs: { uid: makeUid() },
@@ -545,7 +603,7 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
         });
         blocks.push({
           type: "inline-json",
-          text: asJsonBlockString(respExample),
+          text: asJsonBlockString(respRes.example),
         });
       }
     }

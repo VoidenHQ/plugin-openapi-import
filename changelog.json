@@ -1,5 +1,17 @@
 [
   {
+    "version": "v1.0.3",
+    "date": "05/06/2026",
+    "title": "Validation & Import Fixes",
+    "changes": {
+      "Fixed": [
+        "Generated .void files now correctly link to the OpenAPI spec file",
+        "Validation pipeline now correctly resolves project context and spec file paths",
+        "Correct request body block is now generated for each content type — JSON, XML, YAML, multipart form, and binary instead of defaulting to JSON for every request"
+      ]
+    }
+  },
+  {
     "version": "v1.0.2",
     "date": "02/06/2026",
     "title": "UI & Compatibility Fixes",

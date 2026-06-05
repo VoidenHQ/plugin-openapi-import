@@ -10,6 +10,7 @@ import {
   type OpenAPIDocument,
   generateSelected,
   getFilesExists,
+  pickBestContent,
 } from "../utils/converter";
 
 type Props = { context: ExtendedPluginContextExplicit };
@@ -309,12 +310,21 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
     [context, doc, flatEndpoints, selected, activeProject, apiInfo.title, apiInfo.version],
   );
 
-  // mount + event wiring (unchanged)
+  // mount + event wiring
   useEffect(() => {
     const last = (window as any).__voidenOpenAPILastPayload__;
     if (last && typeof last.raw === "string") applyRaw(last.raw);
     else refreshFromEditor();
-    const fetchActiveTab = async ()=>{
+
+    // Use the source path captured at click time — by mount time the active tab
+    // may already have changed away from the YAML spec file.
+    if (last?.activeSource) {
+      setActiveSource(last.activeSource);
+      return;
+    }
+
+    // Fallback: try to read from the current active tab (less reliable)
+    const fetchActiveTab = async () => {
       try {
         const tab = await context.tab?.getActiveTab() as DocumentTab;
         const project = await context.project?.getActiveProject();
@@ -324,18 +334,17 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
           const normalizedSource = tab.source.replace(/\\/g, "/");
           const normalizedProject = project.replace(/\\/g, "/");
           if (normalizedSource.startsWith(normalizedProject)) {
-            relativePath = normalizedSource.slice(normalizedProject.length);
-            relativePath = relativePath.replace(/^[/\\]+/, "");
+            relativePath = normalizedSource.slice(normalizedProject.length).replace(/^[/\\]+/, "");
           } else {
             relativePath = normalizedSource;
           }
         }
 
-        setActiveSource(relativePath);
+        if (relativePath) setActiveSource(relativePath);
       } catch {
-
+        // leave activeSource as ""
       }
-    }
+    };
     fetchActiveTab();
   }, []);
 
@@ -353,12 +362,14 @@ export const OpenAPIImportPanel: React.FC<Props> = ({ context }) => {
         selectAll = false,
         autoGenerate = false,
         currentActiveProject = "",
-      } = detail as { raw?: string; selectAll?: boolean; autoGenerate?: boolean; currentActiveProject?: string };
+        activeSource: payloadActiveSource = "",
+      } = detail as { raw?: string; selectAll?: boolean; autoGenerate?: boolean; currentActiveProject?: string; activeSource?: string };
 
       if (typeof injectedRaw === "string") applyRaw(injectedRaw);
       else refreshFromEditor();
 
       setActiveProject(currentActiveProject);
+      if (payloadActiveSource) setActiveSource(payloadActiveSource);
 
       setTimeout(() => {
         if (selectAll) toggleAll(true);
@@ -673,16 +684,6 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
   const requestBody = ep.requestBody ?? rawOp.requestBody ?? {};
   const responses = ep.responses ?? rawOp.responses ?? {};
 
-  // Pick best content (application/json → application/*+json → */* → first)
-  function pickJsonishContent(content: any) {
-    if (!content || typeof content !== "object") return undefined;
-    if (content["application/json"]) return content["application/json"];
-    const plusJson = Object.keys(content).find((k) => /^application\/.+\+json$/i.test(k));
-    if (plusJson) return content[plusJson];
-    if (content["*/*"]) return content["*/*"];
-    return Object.values(content)[0];
-  }
-
   // ── Example synthesizer (tiny, non-recursive beyond a safe depth) ──────────
   function synthesizeExampleFromSchema(schema: any, depth = 0): any {
     if (!schema || depth > 6) return null;
@@ -738,7 +739,8 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
   }
 
   // Request body
-  const reqJson = pickJsonishContent(requestBody?.content);
+  const bestReq = pickBestContent(requestBody?.content);
+  const reqJson = bestReq?.content;
   const reqSchema = reqJson?.schema;
   const reqExampleExplicit = reqJson?.example ?? reqJson?.examples?.default?.value ?? reqSchema?.example ?? reqSchema?.examples?.default?.value;
   const reqExample = reqExampleExplicit ?? (reqSchema ? synthesizeExampleFromSchema(reqSchema) : undefined);
@@ -815,6 +817,7 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
           <div className="text-xs text-comment">No body</div>
         ) : (
           <>
+            <div className="text-[11px] text-comment mb-1">Content-Type: {bestReq?.type}</div>
             {requestBody.description && <div className="text-xs text-comment mb-1">{requestBody.description}</div>}
 
             <Tabs available={{ example: reqExample != null, schema: !!reqSchema }} value={reqView} onChange={setReqView} />
@@ -833,7 +836,8 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
         ) : (
           <div className="space-y-2">
             {Object.entries<any>(responses).map(([code, resp]) => {
-              const json = pickJsonishContent(resp?.content);
+              const bestResp = pickBestContent(resp?.content);
+              const json = bestResp?.content;
               const schema = json?.schema;
               const explicit = json?.example ?? json?.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
               const example = explicit ?? (schema ? synthesizeExampleFromSchema(schema) : undefined);
@@ -844,6 +848,7 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
               return (
                 <div key={code} className="rounded border border-border p-2">
                   <div className={`text-xs font-semibold ${StatusColor(String(code))}`}>{code}</div>
+                  {bestResp?.type && <div className="text-[10px] text-comment mb-1">Content-Type: {bestResp.type}</div>}
                   {resp?.description && <div className="text-xs text-comment mt-0.5">{resp.description}</div>}
 
                   <Tabs available={{ example: example != null, schema: !!schema }} value={current} onChange={setCurrent} />
