@@ -4,7 +4,7 @@ type PluginContext = CorePluginContext;
 import { OpenAPIImportPanel } from "./components/OpenAPIImportPanel";
 import * as ReactDomClient from "react-dom/client";
 import * as ReactDom from "react-dom";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ExtendedPluginContextExplicit } from "./plugin";
 import { X } from "lucide-react";
 
@@ -26,15 +26,16 @@ function ensureRoot(el: HTMLElement) {
   };
 }
 
-// The outer "shell" fills the host (host is sized to match .bg-editor)
+// Shell fills the host which fills #main-editor (position: relative).
+// No z-index fighting with sidebar or context-menu portals — those live
+// outside #main-editor entirely or are portaled to body at z-[100+].
 const shellStyle: React.CSSProperties = {
   position: "absolute",
   inset: 0,
-  zIndex: 2147483647,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "rgba(0,0,0,0.4)", // dim within the editor area only
+  background: "rgba(0,0,0,0.4)",
 };
 
 const frameStyle: React.CSSProperties = {
@@ -106,79 +107,29 @@ export function createOpenApiOverlay(context: PluginContext) {
   let root: { render: (n: React.ReactNode) => void; unmount: () => void } | null = null;
   let openState = false;
 
-  let targetEl: Element | null = null;
-  let resizeObs: ResizeObserver | null = null;
-
+  // Mount the host as a direct child of #main-editor (position: relative).
+  // Being inside the editor element means the overlay is naturally clipped to
+  // the editor area and never competes with the sidebar, explorer panels, or
+  // context menus portaled to document.body.
   const mount = () => {
-    if (!host) {
-      host = document.createElement("div");
-      host.id = OVERLAY_ID;
-      host.style.position = "absolute"; // key: position absolute
-      host.style.zIndex = String(49);
+    if (host) return;
 
-      // To keep overlay painting above editor, append to body (absolute coords use viewport)
-      document.body.appendChild(host);
-      root = ensureRoot(host);
-    }
+    const targetEl = document.querySelector(TARGET_SELECTOR) as HTMLElement | null;
+    if (!targetEl) return;
+
+    host = document.createElement("div");
+    host.id = OVERLAY_ID;
+    host.style.position = "absolute";
+    host.style.inset = "0";
+    // z-index only needs to exceed the editor's own content layers (all < 20).
+    // Context menus (z-[110]) and dialogs (z-[9999]) live outside this element
+    // so they are never affected.
+    host.style.zIndex = "40";
+    host.style.pointerEvents = "auto";
+
+    targetEl.appendChild(host);
+    root = ensureRoot(host);
   };
-
-  const updatePosition = () => {
-    // Try to find target each time in case the DOM changed
-    targetEl = document.querySelector(TARGET_SELECTOR);
-    if (!targetEl || !host) {
-      // fallback: cover full viewport (rare)
-      host!.style.left = "0px";
-      host!.style.top = "0px";
-      host!.style.width = `${window.innerWidth}px`;
-      host!.style.height = `${window.innerHeight}px`;
-      return;
-    }
-    const rect = (targetEl as HTMLElement).getBoundingClientRect();
-    // Because host is absolutely positioned relative to the viewport,
-    // using rect.{top,left,width,height} aligns it perfectly.
-    host.style.left = `${Math.round(rect.left)}px`;
-    host.style.top = `${Math.round(rect.top)}px`;
-    host.style.width = `${Math.round(rect.width)}px`;
-    host.style.height = `${Math.round(rect.height)}px`;
-    host.style.pointerEvents = "auto"; // ensure clicks go to overlay
-  };
-
-  const addObservers = () => {
-    // Resize/scroll listeners
-    const onWinChange = () => updatePosition();
-    window.addEventListener("resize", onWinChange, { passive: true });
-    window.addEventListener("scroll", onWinChange, { passive: true });
-
-    // ResizeObserver for the target element (handles layout/size changes)
-    const el = document.querySelector(TARGET_SELECTOR) as HTMLElement | null;
-    if (el && "ResizeObserver" in window) {
-      resizeObs = new ResizeObserver(() => updatePosition());
-      resizeObs.observe(el);
-    }
-
-    // A tiny rAF loop to catch rapid layout shifts (debounced)
-    let rafId = 0;
-    const watch = () => {
-      updatePosition();
-      rafId = requestAnimationFrame(watch);
-    };
-    rafId = requestAnimationFrame(watch);
-
-    // Return cleanup
-    return () => {
-      window.removeEventListener("resize", onWinChange);
-      window.removeEventListener("scroll", onWinChange);
-      if (resizeObs) {
-        try {
-          resizeObs.disconnect();
-        } catch {}
-        resizeObs = null;
-      }
-      cancelAnimationFrame(rafId);
-    };
-  };
-
-  let cleanupObservers: (() => void) | null = null;
 
   const toggleVisible = (makeVisible: boolean) => {
     if (host && openState) {
@@ -187,26 +138,18 @@ export function createOpenApiOverlay(context: PluginContext) {
   };
 
   const open = () => {
-    if (openState && host?.style.display==='block') return;
+    if (openState && host?.style.display === "block") return;
     openState = true;
     mount();
-    updatePosition();
-    cleanupObservers = addObservers();
-    root!.render(<OverlayApp context={context} onClose={destroy} />);
-
-    if (host) {
-      host.style.display = "block";
-    }
+    if (!root) return; // target element not in DOM yet
+    root.render(<OverlayApp context={context} onClose={destroy} />);
+    if (host) host.style.display = "block";
   };
 
   const close = () => {
     if (!openState) return;
     openState = false;
-    if (cleanupObservers) {
-      cleanupObservers();
-      cleanupObservers = null;
-    }
-    if (root) root.render(<></>); // unmount children
+    if (root) root.render(<></>);
   };
 
   const destroy = () => {

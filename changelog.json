@@ -1,5 +1,16 @@
 [
   {
+    "version": "v1.0.4",
+    "date": "09/06/2026",
+    "title": "UI Layering & Overflow Fix",
+    "changes": {
+      "Fixed": [
+        "OpenAPI preview overlay now mounts inside the editor area instead of document.body, eliminating z-index conflicts with the sidebar, APYHub Explorer, and right-click context menus",
+        "Preview no longer appears in front of explorer panels or swallows context menu interactions"
+      ]
+    }
+  },
+  {
     "version": "v1.0.3",
     "date": "05/06/2026",
     "title": "Validation & Import Fixes",
