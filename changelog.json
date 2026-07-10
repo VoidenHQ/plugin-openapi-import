@@ -6,7 +6,8 @@
     "changes": {
       "Fixed": [
         "OpenAPI preview overlay now mounts inside the editor area instead of document.body, eliminating z-index conflicts with the sidebar, APYHub Explorer, and right-click context menus",
-        "Preview no longer appears in front of explorer panels or swallows context menu interactions"
+        "Preview no longer appears in front of explorer panels or swallows context menu interactions",
+        "OpenAPI file-format detection now scans only the first 64KB of a tab's content instead of the full buffer, so it no longer rescans the entire file on every render for large specs"
       ]
     }
   },

@@ -151,7 +151,11 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
           // Check should it be shown on tab
           currentTab = tab;
           const name = tab.title?.toLowerCase() || "";
-          const hasOpenApi = tab.content?.includes("openapi") || tab.content?.includes('"openapi"');
+          // The "openapi": "3.x" version field is always at the top level, so a
+          // bounded prefix is enough — keeps this independent of file size instead
+          // of rescanning the full buffer on every render.
+          const contentPrefix = (tab.content ?? "").slice(0, 65536);
+          const hasOpenApi = contentPrefix.includes("openapi") || contentPrefix.includes('"openapi"');
           return (name.endsWith(".json") || name.endsWith(".yaml") || name.endsWith(".yml")) && !!hasOpenApi;
         },
       });
