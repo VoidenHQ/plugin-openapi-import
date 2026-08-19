@@ -35,6 +35,41 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
   let currentTab: EditorTab | null = null;
   let overlay: ReturnType<typeof createOpenApiOverlay> | null = null;
   let lastTabReopen = "";
+
+  // Opens the import overlay/panel and feeds it `raw` spec text, resolving
+  // `activeSource` (the path shown to the user, relative to the project when
+  // possible) the same way regardless of whether the caller is the in-tab
+  // "OpenAPI Preview" button (reads the currently open editor) or the file-tree
+  // "Import as OpenAPI Collection..." context menu item (reads the file directly).
+  const openImportOverlay = async (raw: string, sourcePath: string) => {
+    const currentActiveProject = await context.project.getActiveProject();
+    let activeSource = "";
+    try {
+      const normalizedSource = (sourcePath || "").replace(/\\/g, "/");
+      const normalizedProject = (currentActiveProject ?? "").replace(/\\/g, "/");
+      activeSource =
+        normalizedProject && normalizedSource.startsWith(normalizedProject)
+          ? normalizedSource.slice(normalizedProject.length).replace(/^[/\\]+/, "")
+          : normalizedSource;
+    } catch {
+      // leave activeSource as ""
+    }
+
+    const payload = { raw, currentActiveProject, activeSource, selectAll: false, autoGenerate: false };
+
+    // Stash payload so the panel can consume it synchronously on first render
+    (window as any).__voidenOpenAPILastPayload__ = payload;
+
+    overlay?.open();
+    lastTabReopen = "";
+
+    // Dispatch event after the overlay/panel mounts
+    // (panel also has a mount-time fallback to the "last payload" above)
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("voiden.openapi.process", { detail: payload }));
+    }, 0);
+  };
+
   return {
     onload: async () => {
       // Create overlay only after the app is mounted
@@ -75,24 +110,14 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
                   }
                 };
 
-                const currentActiveProject = await context.project.getActiveProject();
-
                 // Capture the active tab's source path NOW, before the overlay
                 // opens and potentially changes which tab is considered "active".
-                let activeSource = "";
+                let sourcePath = "";
                 try {
                   const tab = await context.tab?.getActiveTab?.() as any;
-                  if (tab?.source) {
-                    const normalizedSource = tab.source.replace(/\\/g, "/");
-                    const normalizedProject = (currentActiveProject ?? "").replace(/\\/g, "/");
-                    if (normalizedProject && normalizedSource.startsWith(normalizedProject)) {
-                      activeSource = normalizedSource.slice(normalizedProject.length).replace(/^[/\\]+/, "");
-                    } else {
-                      activeSource = normalizedSource;
-                    }
-                  }
+                  if (tab?.source) sourcePath = tab.source;
                 } catch {
-                  // leave activeSource as ""
+                  // leave sourcePath as ""
                 }
 
                 const rawFromEditor = readActiveEditorText();
@@ -101,36 +126,7 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
                 const rawFromTab = (currentTab?.content ?? "").trim();
                 const raw = rawFromEditor.trim() || rawFromTab;
 
-                // Stash payload so the panel can consume it synchronously on first render
-                (window as any).__voidenOpenAPILastPayload__ = {
-                  raw,
-                  currentActiveProject,
-                  activeSource,
-                  selectAll: false,
-                  autoGenerate: false,
-                };
-
-                // 1) Open overlay
-                overlay?.open();
-
-                // Remove old tab
-                lastTabReopen = "";
-
-                // 2) Dispatch event after the overlay/panel mounts
-                //    (panel also has a mount-time fallback to the "last payload" above)
-                setTimeout(() => {
-                  window.dispatchEvent(
-                    new CustomEvent("voiden.openapi.process", {
-                      detail: {
-                        raw,
-                        currentActiveProject,
-                        activeSource,
-                        selectAll: false,
-                        autoGenerate: false,
-                      },
-                    }),
-                  );
-                }, 0);
+                await openImportOverlay(raw, sourcePath);
               } catch (e) {
                 console.error("[openapi-import] failed to open overlay", e);
               }
@@ -157,6 +153,27 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
           const contentPrefix = (tab.content ?? "").slice(0, 65536);
           const hasOpenApi = contentPrefix.includes("openapi") || contentPrefix.includes('"openapi"');
           return (name.endsWith(".json") || name.endsWith(".yaml") || name.endsWith(".yml")) && !!hasOpenApi;
+        },
+      });
+
+      // The button above only ever appears once an OpenAPI file is already the
+      // active tab — easy to miss. Mirror the same import flow as a file-tree
+      // right-click action so it's discoverable without opening the file first.
+      context.registerContextMenu?.({
+        id: "openapi-import-context-menu",
+        label: "Import as OpenAPI Collection...",
+        surface: "file",
+        when: (target: any) => {
+          const name = (target?.name ?? "").toLowerCase();
+          return target?.type === "file" && (name.endsWith(".json") || name.endsWith(".yaml") || name.endsWith(".yml"));
+        },
+        action: async (target: any) => {
+          try {
+            const raw = (await context.files?.read?.(target?.path)) ?? "";
+            await openImportOverlay(raw, target?.path ?? "");
+          } catch (e) {
+            console.error("[openapi-import] failed to open overlay from context menu", e);
+          }
         },
       });
 

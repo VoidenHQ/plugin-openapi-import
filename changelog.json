@@ -1,5 +1,15 @@
 [
   {
+    "version": "v1.0.5",
+    "date": "19/08/2026",
+    "title": "Import from the File Tree",
+    "changes": {
+      "Added": [
+        "Right-click a JSON/YAML file in the file tree and choose \"Import as OpenAPI Collection...\" — reads the file directly and opens the same preview/import overlay, no need to open it as a tab first and find the small action-bar icon"
+      ]
+    }
+  },
+  {
     "version": "v1.0.4",
     "date": "09/06/2026",
     "title": "UI Layering & Overflow Fix",
