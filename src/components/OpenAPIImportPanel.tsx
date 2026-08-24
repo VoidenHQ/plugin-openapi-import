@@ -10,12 +10,14 @@ import {
   type OpenAPIDocument,
   generateSelected,
   getFilesExists,
+  getJsonMockResponse,
   pickBestContent,
+  sampleFromSchema,
 } from "../utils/converter";
 
 type Props = { context: ExtendedPluginContextExplicit };
 import "../openapi-plugin.css";
-import { ArrowUp,ArrowDown, CircleX } from "lucide-react";
+import { ArrowUp, ArrowDown, CircleX, Copy } from "lucide-react";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // HTTP Method styling using theme variables
@@ -75,9 +77,9 @@ const methodKey = (m?: string) => (m || "").toLowerCase() as keyof typeof SWAGGE
 const StatusColor = (code: string) =>
   code.startsWith("2") ? "text-text" : "text-comment";
 
-const CodeBox: React.FC<{ value?: unknown; maxH?: number }> = ({ value, maxH = 224 }) => {
+const CodeBox: React.FC<{ value?: unknown; maxH?: number; json?: boolean }> = ({ value, maxH = 224, json = false }) => {
   if (value == null) return null;
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const text = json ? JSON.stringify(value, null, 2) : typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return (
     <pre className="mt-1 border border-border rounded bg-editor p-2 text-xs overflow-auto text-text" style={{ maxHeight: maxH }}>
       <code>{text}</code>
@@ -684,70 +686,39 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
   const requestBody = ep.requestBody ?? rawOp.requestBody ?? {};
   const responses = ep.responses ?? rawOp.responses ?? {};
 
-  // ── Example synthesizer (tiny, non-recursive beyond a safe depth) ──────────
-  function synthesizeExampleFromSchema(schema: any, depth = 0): any {
-    if (!schema || depth > 6) return null;
-
-    if (schema.const !== undefined) return schema.const;
-    if (Array.isArray(schema.enum) && schema.enum.length) return schema.enum[0];
-    if (schema.default !== undefined) return schema.default;
-    if (schema.example !== undefined) return schema.example;
-
-    const t = schema.type || (schema.properties ? "object" : schema.items ? "array" : undefined);
-
-    switch (t) {
-      case "object": {
-        const props = schema.properties || {};
-        const out: any = {};
-        for (const [key, propSchema] of Object.entries<any>(props)) {
-          out[key] = synthesizeExampleFromSchema(propSchema, depth + 1);
-        }
-        // required-only fallback if no properties populated
-        if (!Object.keys(out).length && Array.isArray(schema.required)) {
-          for (const key of schema.required) out[key] = null;
-        }
-        return out;
-      }
-      case "array": {
-        const item = schema.items || {};
-        // cap array size to 1 to keep panel small
-        return [synthesizeExampleFromSchema(item, depth + 1)];
-      }
-      case "integer":
-      case "number":
-        return 0;
-      case "boolean":
-        return false;
-      case "string":
-        if (schema.format === "date-time") return new Date().toISOString();
-        if (schema.format === "date") return new Date().toISOString().slice(0, 10);
-        if (schema.format === "uuid") return "00000000-0000-0000-0000-000000000000";
-        if (schema.format === "email") return "user@example.com";
-        return "string";
-      default: {
-        if (schema.anyOf?.length) return synthesizeExampleFromSchema(schema.anyOf[0], depth + 1);
-        if (schema.oneOf?.length) return synthesizeExampleFromSchema(schema.oneOf[0], depth + 1);
-        if (schema.allOf?.length) {
-          return schema.allOf.reduce((acc: any, s: any) => {
-            const v = synthesizeExampleFromSchema(s, depth + 1);
-            return typeof acc === "object" && acc && typeof v === "object" && v ? { ...acc, ...v } : acc ?? v;
-          }, {});
-        }
-        return null;
-      }
-    }
-  }
-
   // Request body
   const bestReq = pickBestContent(requestBody?.content);
   const reqJson = bestReq?.content;
   const reqSchema = reqJson?.schema;
   const reqExampleExplicit = reqJson?.example ?? reqJson?.examples?.default?.value ?? reqSchema?.example ?? reqSchema?.examples?.default?.value;
-  const reqExample = reqExampleExplicit ?? (reqSchema ? synthesizeExampleFromSchema(reqSchema) : undefined);
+  const reqExample = reqExampleExplicit ?? (reqSchema ? sampleFromSchema(reqSchema) : undefined);
 
   // Local UI state for tabs
   const [reqView, setReqView] = React.useState<"example" | "schema">(reqExample != null ? "example" : "schema");
-  const [respView, setRespView] = React.useState<Record<string, "example" | "schema">>({});
+  const responseEntries = Object.entries<any>(responses);
+  const defaultStatus = responseEntries.find(([code]) => code.startsWith("2"))?.[0] ?? responseEntries[0]?.[0] ?? "";
+  const [selectedStatus, setSelectedStatus] = React.useState(defaultStatus);
+  const [copyStatus, setCopyStatus] = React.useState<"idle" | "copied" | "failed">("idle");
+
+  React.useEffect(() => {
+    setSelectedStatus(defaultStatus);
+    setCopyStatus("idle");
+  }, [ep.id, defaultStatus]);
+
+  const selectedResponse = responses[selectedStatus];
+  const mockResponse = getJsonMockResponse(selectedResponse);
+
+  const copyMockResponse = async () => {
+    if (mockResponse?.example === undefined) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(mockResponse.example, null, 2));
+      setCopyStatus("copied");
+      window.setTimeout(() => setCopyStatus("idle"), 1500);
+    } catch {
+      setCopyStatus("failed");
+      window.setTimeout(() => setCopyStatus("idle"), 1500);
+    }
+  };
 
   // Tiny toggle header
   const Tabs: React.FC<{
@@ -831,33 +802,42 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
       {/* Responses */}
       <section>
         <h4 className="text-[12px] font-semibold mb-2 text-text">Responses</h4>
-        {!responses || Object.keys(responses).length === 0 ? (
+        {responseEntries.length === 0 ? (
           <div className="text-xs text-comment">No responses</div>
         ) : (
-          <div className="space-y-2">
-            {Object.entries<any>(responses).map(([code, resp]) => {
-              const bestResp = pickBestContent(resp?.content);
-              const json = bestResp?.content;
-              const schema = json?.schema;
-              const explicit = json?.example ?? json?.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
-              const example = explicit ?? (schema ? synthesizeExampleFromSchema(schema) : undefined);
+          <div className="rounded border border-border p-2">
+            <label className="block text-[11px] text-comment mb-1" htmlFor={`openapi-response-status-${ep.id}`}>Response status</label>
+            <select
+              id={`openapi-response-status-${ep.id}`}
+              className="w-full rounded border border-border bg-editor px-2 py-1 text-xs text-text"
+              value={selectedStatus}
+              onChange={(event) => setSelectedStatus(event.target.value)}
+            >
+              {responseEntries.map(([code, response]) => (
+                <option key={code} value={code}>{code}{response?.description ? ` — ${response.description}` : ""}</option>
+              ))}
+            </select>
 
-              const current = respView[code] ?? (example != null ? "example" : "schema");
-              const setCurrent = (v: "example" | "schema") => setRespView((m) => ({ ...m, [code]: v }));
+            <div className={`mt-2 text-xs font-semibold ${StatusColor(selectedStatus)}`}>{selectedStatus}</div>
+            {selectedResponse?.description && <div className="text-xs text-comment mt-0.5">{selectedResponse.description}</div>}
 
-              return (
-                <div key={code} className="rounded border border-border p-2">
-                  <div className={`text-xs font-semibold ${StatusColor(String(code))}`}>{code}</div>
-                  {bestResp?.type && <div className="text-[10px] text-comment mb-1">Content-Type: {bestResp.type}</div>}
-                  {resp?.description && <div className="text-xs text-comment mt-0.5">{resp.description}</div>}
-
-                  <Tabs available={{ example: example != null, schema: !!schema }} value={current} onChange={setCurrent} />
-
-                  {current === "schema" && schema != null && <CodeBox value={schema} />}
-                  {current === "example" && example != null && <CodeBox value={example} />}
+            {mockResponse?.example !== undefined ? (
+              <>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-comment">Content-Type: {mockResponse.type}</div>
+                  <button
+                    className="flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-text hover:bg-active disabled:cursor-not-allowed disabled:opacity-50"
+                    type="button"
+                    onClick={copyMockResponse}
+                  >
+                    <Copy size={12} aria-hidden="true" /> {copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : "Copy JSON"}
+                  </button>
                 </div>
-              );
-            })}
+                <CodeBox value={mockResponse.example} json />
+              </>
+            ) : (
+              <div className="mt-2 text-xs text-comment">JSON mock preview is available only for application/json responses with an example or schema.</div>
+            )}
           </div>
         )}
       </section>
