@@ -243,7 +243,7 @@ const firstServer = (doc: OpenAPIDocument) => {
 const makeUid = () =>
   typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Math.random().toString(36).slice(2);
 
-function sampleFromSchema(schema: any, depth = 0): any {
+export function sampleFromSchema(schema: any, depth = 0): any {
   if (!schema || depth > 8) return null;
 
   if (schema.const !== undefined) return schema.const;
@@ -345,6 +345,34 @@ export function pickBestContent(content: any): { type: string; content: any } | 
   // Fallback to the first entry
   const firstType = types[0];
   return { type: firstType, content: content[firstType] };
+}
+
+export type JsonMockResponse = {
+  type: string;
+  example: any;
+  schema: any;
+};
+
+const firstNamedExample = (examples: any) =>
+  Object.values(examples ?? {}).find((example: any) => example?.value !== undefined) as { value: any } | undefined;
+
+/** Build a JSON mock from one documented OpenAPI response. */
+export function getJsonMockResponse(response: any): JsonMockResponse | undefined {
+  const content = response?.content;
+  if (!content || typeof content !== "object") return undefined;
+
+  const types = Object.keys(content);
+  const type = types.find((candidate) => candidate.toLowerCase() === "application/json")
+    ?? types.find((candidate) => /^application\/.+\+json$/i.test(candidate));
+  if (!type) return undefined;
+
+  const body = content[type] ?? {};
+  const schema = body.schema;
+  const explicit = [body.example, firstNamedExample(body.examples)?.value, schema?.example, schema?.default]
+    .find((value) => value !== undefined);
+  const example = explicit !== undefined ? explicit : schema ? sampleFromSchema(schema) : undefined;
+
+  return { type, example, schema };
 }
 
 function sampleFromParamSchemaToString(schema: any): string {

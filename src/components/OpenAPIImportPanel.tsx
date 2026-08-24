@@ -10,12 +10,13 @@ import {
   type OpenAPIDocument,
   generateSelected,
   getFilesExists,
+  getJsonMockResponse,
   pickBestContent,
 } from "../utils/converter";
 
 type Props = { context: ExtendedPluginContextExplicit };
 import "../openapi-plugin.css";
-import { ArrowUp,ArrowDown, CircleX } from "lucide-react";
+import { ArrowUp, ArrowDown, CircleX, Copy } from "lucide-react";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // HTTP Method styling using theme variables
@@ -75,9 +76,9 @@ const methodKey = (m?: string) => (m || "").toLowerCase() as keyof typeof SWAGGE
 const StatusColor = (code: string) =>
   code.startsWith("2") ? "text-text" : "text-comment";
 
-const CodeBox: React.FC<{ value?: unknown; maxH?: number }> = ({ value, maxH = 224 }) => {
-  if (value == null) return null;
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+const CodeBox: React.FC<{ value?: unknown; maxH?: number; json?: boolean }> = ({ value, maxH = 224, json = false }) => {
+  if (value === undefined || (value === null && !json)) return null;
+  const text = json ? JSON.stringify(value, null, 2) : typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return (
     <pre className="mt-1 border border-border rounded bg-editor p-2 text-xs overflow-auto text-text" style={{ maxHeight: maxH }}>
       <code>{text}</code>
@@ -748,6 +749,35 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
   // Local UI state for tabs
   const [reqView, setReqView] = React.useState<"example" | "schema">(reqExample != null ? "example" : "schema");
   const [respView, setRespView] = React.useState<Record<string, "example" | "schema">>({});
+  const responseEntries = Object.entries<any>(responses);
+  const defaultStatus = responseEntries.find(([code]) => code.startsWith("2"))?.[0] ?? responseEntries[0]?.[0] ?? "";
+  const [selectedStatus, setSelectedStatus] = React.useState(defaultStatus);
+  const [copyStatus, setCopyStatus] = React.useState<"idle" | "copied" | "failed">("idle");
+
+  React.useEffect(() => {
+    setSelectedStatus(defaultStatus);
+  }, [ep.id, defaultStatus]);
+
+  const selectedResponse = responses[selectedStatus];
+  const mockResponse = React.useMemo(() => getJsonMockResponse(selectedResponse), [selectedResponse]);
+
+  React.useEffect(() => setCopyStatus("idle"), [mockResponse]);
+
+  React.useEffect(() => {
+    if (copyStatus === "idle") return;
+    const timeout = window.setTimeout(() => setCopyStatus("idle"), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [copyStatus]);
+
+  const copyMockResponse = async () => {
+    if (mockResponse?.example === undefined) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(mockResponse.example, null, 2));
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
 
   // Tiny toggle header
   const Tabs: React.FC<{
@@ -831,35 +861,72 @@ const OperationDetails: React.FC<{ ep: EndpointNode; dense?: boolean }> = ({ ep,
       {/* Responses */}
       <section>
         <h4 className="text-[12px] font-semibold mb-2 text-text">Responses</h4>
-        {!responses || Object.keys(responses).length === 0 ? (
+        {responseEntries.length === 0 ? (
           <div className="text-xs text-comment">No responses</div>
         ) : (
-          <div className="space-y-2">
-            {Object.entries<any>(responses).map(([code, resp]) => {
-              const bestResp = pickBestContent(resp?.content);
-              const json = bestResp?.content;
-              const schema = json?.schema;
-              const explicit = json?.example ?? json?.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
-              const example = explicit ?? (schema ? synthesizeExampleFromSchema(schema) : undefined);
+          <div className="rounded border border-border p-2">
+            <h5 className="text-xs font-semibold mb-2 text-text">JSON mock response</h5>
+            <label className="block text-[11px] text-comment mb-1" htmlFor={`openapi-response-status-${ep.id}`}>Response status</label>
+            <select
+              id={`openapi-response-status-${ep.id}`}
+              className="w-full rounded border border-border bg-editor px-2 py-1 text-xs text-text"
+              value={selectedStatus}
+              onChange={(event) => setSelectedStatus(event.target.value)}
+            >
+              {responseEntries.map(([code, response]) => (
+                <option key={code} value={code}>{code}{response?.description ? ` — ${response.description}` : ""}</option>
+              ))}
+            </select>
 
-              const current = respView[code] ?? (example != null ? "example" : "schema");
-              const setCurrent = (v: "example" | "schema") => setRespView((m) => ({ ...m, [code]: v }));
+            <div className={`mt-2 text-xs font-semibold ${StatusColor(selectedStatus)}`}>{selectedStatus}</div>
+            {selectedResponse?.description && <div className="text-xs text-comment mt-0.5">{selectedResponse.description}</div>}
 
-              return (
-                <div key={code} className="rounded border border-border p-2">
-                  <div className={`text-xs font-semibold ${StatusColor(String(code))}`}>{code}</div>
-                  {bestResp?.type && <div className="text-[10px] text-comment mb-1">Content-Type: {bestResp.type}</div>}
-                  {resp?.description && <div className="text-xs text-comment mt-0.5">{resp.description}</div>}
-
-                  <Tabs available={{ example: example != null, schema: !!schema }} value={current} onChange={setCurrent} />
-
-                  {current === "schema" && schema != null && <CodeBox value={schema} />}
-                  {current === "example" && example != null && <CodeBox value={example} />}
+            {mockResponse?.example !== undefined ? (
+              <>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-comment">Content-Type: {mockResponse.type}</div>
+                  <button
+                    className="flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-text hover:bg-active disabled:cursor-not-allowed disabled:opacity-50"
+                    type="button"
+                    onClick={copyMockResponse}
+                  >
+                    <Copy size={12} aria-hidden="true" />
+                    <span aria-live="polite">{copyStatus === "copied" ? "Copied" : copyStatus === "failed" ? "Copy failed" : "Copy JSON"}</span>
+                  </button>
                 </div>
-              );
-            })}
+                <CodeBox value={mockResponse.example} json />
+              </>
+            ) : (
+              <div className="mt-2 text-xs text-comment">JSON mock preview requires application/json or application/*+json content with an example or schema.</div>
+            )}
           </div>
         )}
+
+        <div className="mt-2 space-y-2">
+          {responseEntries.map(([code, resp]) => {
+            const bestResp = pickBestContent(resp?.content);
+            const body = bestResp?.content;
+            const schema = body?.schema;
+            const explicit = body?.example ?? body?.examples?.default?.value ?? schema?.example ?? schema?.examples?.default?.value;
+            const example = explicit ?? (schema ? synthesizeExampleFromSchema(schema) : undefined);
+
+            const current = respView[code] ?? (example != null ? "example" : "schema");
+            const setCurrent = (v: "example" | "schema") => setRespView((m) => ({ ...m, [code]: v }));
+
+            return (
+              <div key={code} className="rounded border border-border p-2">
+                <div className={`text-xs font-semibold ${StatusColor(code)}`}>{code}</div>
+                {bestResp?.type && <div className="text-[10px] text-comment mb-1">Content-Type: {bestResp.type}</div>}
+                {resp?.description && <div className="text-xs text-comment mt-0.5">{resp.description}</div>}
+
+                <Tabs available={{ example: example != null, schema: !!schema }} value={current} onChange={setCurrent} />
+
+                {current === "schema" && schema != null && <CodeBox value={schema} />}
+                {current === "example" && example != null && <CodeBox value={example} />}
+              </div>
+            );
+          })}
+        </div>
       </section>
     </div>
   );
