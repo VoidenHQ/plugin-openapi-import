@@ -149,10 +149,31 @@ const openapiImportPlugin = (context: ExtendedPluginContextExplicit) => {
           const name = tab.title?.toLowerCase() || "";
           // The "openapi": "3.x" version field is always at the top level, so a
           // bounded prefix is enough — keeps this independent of file size instead
-          // of rescanning the full buffer on every render.
+          // of rescanning the full buffer on every render. Match the actual
+          // field-assignment shape (key, colon, "3." version), not a bare
+          // "openapi" substring — a loose word match false-positives on any
+          // file whose description/name/comment merely mentions "OpenAPI"
+          // without the document actually being one. Covers both JSON
+          // (`"openapi": "3.0.1"`) and YAML (`openapi: 3.0.1`, quoted or not).
           const contentPrefix = (tab.content ?? "").slice(0, 65536);
-          const hasOpenApi = contentPrefix.includes("openapi") || contentPrefix.includes('"openapi"');
-          return (name.endsWith(".json") || name.endsWith(".yaml") || name.endsWith(".yml")) && !!hasOpenApi;
+          const hasOpenApi = /["']?openapi["']?\s*:\s*["']?3\./.test(contentPrefix);
+          // A real OpenAPI *document*'s "openapi" field sits at the actual
+          // top level. But another tool's own export can legitimately embed
+          // a whole linked OpenAPI spec nested inside it — confirmed real
+          // for Insomnia v5's "spec.insomnia.rest/5.0" collection type,
+          // whose `spec.contents.openapi` field satisfies the check above
+          // even though the file is fundamentally an Insomnia export, not a
+          // raw OpenAPI document. A bounded prefix scan can't reliably tell
+          // "top-level" from "nested" without actually parsing the
+          // structure, so instead: if the file also carries another tool's
+          // own real format marker, that tool's importer owns this file —
+          // don't compete for the same tab.
+          const isAnotherToolsExport =
+            contentPrefix.includes("insomnia.rest/") || contentPrefix.includes("__export_format") ||
+            contentPrefix.includes('"_type":"export"') || contentPrefix.includes('"_type": "export"') ||
+            contentPrefix.includes("schema.getpostman.com") || contentPrefix.includes("_postman_variable_scope") ||
+            /^\s*opencollection\s*:/m.test(contentPrefix);
+          return (name.endsWith(".json") || name.endsWith(".yaml") || name.endsWith(".yml")) && hasOpenApi && !isAnotherToolsExport;
         },
       });
 

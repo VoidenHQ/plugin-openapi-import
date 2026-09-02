@@ -1,11 +1,15 @@
 [
   {
-    "version": "v1.0.5",
-    "date": "19/08/2026",
-    "title": "Import from the File Tree",
+    "version": "v1.0.6",
+    "date": "02/09/2026",
+    "title": "Detection Fixes & Agent Skill",
     "changes": {
       "Added": [
-        "Right-click a JSON/YAML file in the file tree and choose \"Import as OpenAPI Collection...\" — reads the file directly and opens the same preview/import overlay, no need to open it as a tab first and find the small action-bar icon"
+        "Right-click a JSON/YAML file in the file tree and choose \"Import as OpenAPI Collection...\" — reads the file directly and opens the same preview/import overlay, no need to open it as a tab first and find the small action-bar icon",
+        "src/skill.md — teaches an agent how to generate .void files directly from a raw OpenAPI document, including CRUD-consolidation guidance, the auth mapping the deterministic importer doesn't generate at all (security schemes → Voiden auth blocks), and the openapispecLink block that enables live response validation against the spec"
+      ],
+      "Fixed": [
+        "The import button's file-detection check matched the bare word \"openapi\" anywhere in a file — a false positive on any file whose description/name/comment merely mentions \"OpenAPI\" without the document actually being one. Now requires the real field-assignment shape (openapi: 3.x) and excludes files that also carry another tool's own format marker (Postman, Bruno, Insomnia), since those legitimately embed a linked OpenAPI spec without being one themselves"
       ]
     }
   },
