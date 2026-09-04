@@ -19,3 +19,7 @@ Import OpenAPI v3.0 collections and convert them into native Voiden request file
 ## Usage
 
 Click the **Import OpenAPI** button in the left sidebar, select a `.json` OpenAPI v3.0 file, and the importer will create a matching folder tree under your active project.
+
+## Preview a mock response
+
+Expand an imported endpoint, choose a documented response status, then copy the generated JSON response. The preview uses an explicit example first and otherwise generates a small value from the response schema. This first version supports `application/json` and `application/*+json` responses.
