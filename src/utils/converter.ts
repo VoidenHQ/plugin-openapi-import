@@ -234,7 +234,7 @@ export const openApiToNodes = (doc: OpenAPIDocument): TagNode[] => {
 };
 
 const firstServer = (doc: OpenAPIDocument) => {
-  const url = doc.servers?.[0]?.url || "";
+  const url = normalizeTemplateVars(doc.servers?.[0]?.url) || "";
   return url.endsWith("/") ? url.slice(0, -1) : url;
 };
 
@@ -242,12 +242,6 @@ const firstServer = (doc: OpenAPIDocument) => {
 
 const makeUid = () =>
   typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-
-const toRows = (pairs: Array<[string, string]>) =>
-  pairs.map(([k, v]) => ({
-    attrs: { disabled: false },
-    row: [String(k), String(v ?? "")],
-  }));
 
 function sampleFromSchema(schema: any, depth = 0): any {
   if (!schema || depth > 8) return null;
@@ -432,30 +426,49 @@ function isPlainObject(v: any): v is Record<string, any> {
   return v && typeof v === "object" && !Array.isArray(v);
 }
 
-// Turn a schema into a compact string for table cells (only if default is provided)
+// Turn a schema into a compact string for table cells (only if default is
+// provided). Returns "—", never "" — the editor's ProseMirror engine
+// rejects an empty text node outright and silently discards the whole
+// block it's in when the file is next opened, and a schema with no
+// `default` (the common case for a header/query param — OpenAPI parameters
+// describe shape, not a concrete value to send) is exactly when this
+// function used to return "".
+// A spec's default value is very rarely a template reference — OpenAPI has
+// no environment-variable concept of its own — but a spec hand-authored or
+// migrated from a tool that does (Postman/Insomnia collections often get
+// converted to/from OpenAPI) can carry over Insomnia's native `{{ _.VAR }}`
+// namespace syntax, which Voiden's {{VAR}} substitution doesn't recognize.
+// Normalize it the same way every other importer does.
+function normalizeTemplateVars<T extends string | undefined>(text: T): T {
+  if (!text) return text;
+  return text.replace(/\{\{\s*_\.\s*([^}]+?)\s*\}\}/g, '{{$1}}') as T;
+}
+
 function tableValueFromSchema(schema: any): string {
   if (schema && schema.default !== undefined) {
     const v = schema.default;
-    if (v === undefined || v === null) return "";
+    if (v === undefined || v === null) return "—";
     if (isPlainObject(v) || Array.isArray(v)) {
       try {
         return JSON.stringify(v);
       } catch {
-        return "";
+        return "—";
       }
     }
-    return String(v);
+    return normalizeTemplateVars(String(v));
   }
-  return "";
+  return "—";
 }
 
 /**
  * Flatten an object schema's immediate properties to rows.
  * Deeply nested objects are flattened with dot notation (up to `maxDepth`).
  * Arrays yield a single representative sample (index 0) stringified.
+ * Third element is the property's own schema description, or "—" — never
+ * "" (see tableValueFromSchema).
  */
-function flattenSchemaToRows(baseName: string, schema: any, maxDepth = 3, depth = 0): Array<[string, string]> {
-  const rows: Array<[string, string]> = [];
+function flattenSchemaToRows(baseName: string, schema: any, maxDepth = 3, depth = 0): Array<[string, string, string]> {
+  const rows: Array<[string, string, string]> = [];
 
   const type = schema?.type || (schema?.properties ? "object" : schema?.items ? "array" : undefined);
 
@@ -467,18 +480,18 @@ function flattenSchemaToRows(baseName: string, schema: any, maxDepth = 3, depth 
       if (subType === "object" && depth < maxDepth) {
         rows.push(...flattenSchemaToRows(key, subSchema, maxDepth, depth + 1));
       } else {
-        rows.push([key, tableValueFromSchema(subSchema)]);
+        rows.push([key, tableValueFromSchema(subSchema), subSchema?.description || "—"]);
       }
     }
     if (rows.length === 0) {
       // object with no properties -> at least give one row so the user can fill it
-      rows.push([baseName, tableValueFromSchema(schema)]);
+      rows.push([baseName, tableValueFromSchema(schema), schema?.description || "—"]);
     }
     return rows;
   }
 
   // arrays or primitives -> single row
-  rows.push([baseName, tableValueFromSchema(schema)]);
+  rows.push([baseName, tableValueFromSchema(schema), schema?.description || "—"]);
   return rows;
 }
 
@@ -515,18 +528,14 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
   // HEADERS
   const headers = (ep.parameters || [])
     .filter((p) => p.in === "header")
-    .map((p) => [p.name, tableValueFromSchema(p.schema)] as [string, string]);
+    .map((p) => [p.name, tableValueFromSchema(p.schema), p.description || "—"] as [string, string, string]);
 
   if (headers.length) {
-    blocks.push({
-      type: "headers-table",
-      attrs: { uid: makeUid(), importedFrom: "" },
-      content: [{ type: "table", rows: toRows(headers) }],
-    });
+    blocks.push(helpers.createHeadersTableNode(headers));
   }
 
   // QUERY
-  const queries: Array<[string, string]> = [];
+  const queries: Array<[string, string, string]> = [];
   (ep.parameters || [])
     .filter((p) => p.in === "query")
     .forEach((p) => {
@@ -542,30 +551,39 @@ const endpointToVoidenFileContent = async (ep: EndpointNode, doc: OpenAPIDocumen
         queries.push(...flattenSchemaToRows(p.name, schema));
       } else {
         // Single row (primitive, array, or non-exploded object)
-        queries.push([p.name, tableValueFromSchema(schema)]);
+        queries.push([p.name, tableValueFromSchema(schema), p.description || "—"]);
       }
     });
 
   if (queries.length) {
-    blocks.push({
-      type: "query-table",
-      attrs: { uid: makeUid(), importedFrom: "" }, // ensure empty string is quoted
-      content: [{ type: "table", rows: toRows(queries) }],
-    });
+    blocks.push(helpers.createQueryTableNode(queries));
+  }
+
+  // PATH PARAMETERS — OpenAPI's `{param}` segments already match Voiden's
+  // own path-param syntax verbatim (no conversion needed), but the actual
+  // path-table row for each one was never being generated at all: every
+  // `in: "path"` parameter was silently dropped, regardless of how many a
+  // given operation had.
+  const pathParams = (ep.parameters || [])
+    .filter((p) => p.in === "path")
+    .map((p) => [p.name, tableValueFromSchema(p.schema), p.description || "—"] as [string, string, string]);
+
+  if (pathParams.length) {
+    blocks.push(helpers.createPathParamsTableNode(pathParams));
   }
 
   // REQUEST BODY
   const reqRes = getRequestExample(ep);
   if (reqRes?.example !== undefined && reqRes?.example !== null) {
     const { type, example, schema } = reqRes;
-    
+
     if (type === "multipart/form-data" || type === "application/x-www-form-urlencoded") {
       const rows = schema ? flattenSchemaToRows("root", schema) : [];
-      blocks.push({
-        type: type === "multipart/form-data" ? "multipart-table" : "url-table",
-        attrs: { uid: makeUid(), importedFrom: "" },
-        content: [{ type: "table", rows: toRows(rows) }],
-      });
+      blocks.push(
+        type === "multipart/form-data"
+          ? helpers.createMultipartTableNode(rows as any)
+          : helpers.createUrlTableNode(rows as any)
+      );
     } else if (type === "application/xml" || type === "text/xml") {
       blocks.push({
         type: "xml_body",

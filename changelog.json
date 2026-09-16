@@ -1,5 +1,19 @@
 [
   {
+    "version": "v1.0.7",
+    "date": "16/09/2026",
+    "title": "Table Corruption Fix & Path Parameters",
+    "changes": {
+      "Added": [
+        "Path parameters now generate a path-table block instead of being silently dropped"
+      ],
+      "Fixed": [
+        "Headers, query, multipart, and url-table blocks with no value for a field could corrupt the whole file — missing values now show as \"—\" instead of a literal empty cell",
+        "Spec default values and server URLs with a leftover Insomnia-style {{ _.VAR }} reference are now normalized to {{VAR}}"
+      ]
+    }
+  },
+  {
     "version": "v1.0.6",
     "date": "02/09/2026",
     "title": "Detection Fixes & Agent Skill",
